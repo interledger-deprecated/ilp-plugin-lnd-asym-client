@@ -1,0 +1,25 @@
+{
+  "name": "ilp-plugin-lightning",
+  "version": "0.1.0",
+  "description": "Interledger.js Ledger Plugin for the Lightning Network",
+  "main": "src/plugin.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "interledger",
+    "ilp",
+    "lightning",
+    "lnd",
+    "bitcoin"
+  ],
+  "author": "Evan Schwartz <evan@ripple.com>",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "debug": "^2.6.8",
+    "eventemitter2": "^4.1.0",
+    "grpc": "^1.3.7",
+    "ilp-plugin-shared": "https://github.com/interledgerjs/ilp-plugin-shared.git",
+    "nodejs-lnd-grpc-client": "^0.2.4"
+  }
+}

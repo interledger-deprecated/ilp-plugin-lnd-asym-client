@@ -1,0 +1,318 @@
+'use strict'
+
+const grpc = require('grpc')
+const debug = require('debug')('ilp-plugin-lightning')
+const EventEmitter = require('eventemitter2')
+const shared = require('ilp-plugin-shared')
+const crypto = require('crypto')
+const InvalidFieldsError = shared.Errors.InvalidFieldsError
+
+const lnrpcDescriptor = grpc.load('./rpc.proto')
+const lnrpc = lnrpcDescriptor.lnrpc
+
+module.exports = class PluginLightning extends EventEmitter {
+  constructor ({
+    outgoingAmount,
+    rpcUri,
+    timeout,
+    peerPublicKey,
+    lndUri,
+    maxInFlight,
+    _store,
+  }) {
+    super()
+
+    if (!rpcUri) {
+      throw new InvalidFieldsError('missing opts.rpcUri')
+    } else if (!peerPublicKey) {
+      throw new InvalidFieldsError('missing opts.peerPublicKey')
+    } else if (!lndUri) {
+      throw new InvalidFieldsError('missing opts.lndUri')
+    } else if (!_store) {
+      throw new InvalidFieldsError('missing opts._store')
+    }
+
+    this._peerPublicKey = opts.peerPublicKey
+
+    // TODO: make the balance right, and have it be configurable
+    this._inFlight = new shared.Balance({ store: _store, maximum: maxInFlight })
+    this._transfers = new shared.TransferLog({ store: _store })
+    this._validator = new shared.Validator({ plugin: this })
+    this.isAuthorized = () => true
+    this._rpc = new shared.HttpRpc({
+      rpcUri: rpcUri,
+      plugin: this,
+      // TODO: shared secret or something
+      authToken: 'placeholder'
+    })
+
+    // TODO add credentials
+    this._lightning = new lnrpc.Lightning(lndUri || 'localhost:10009', grpc.credentials.createInsecure())
+
+    this.receive = this._rpc.receive.bind(this._rpc)
+    this._rpc.addMethod('send_message', this._handleSendMessage)
+    this._rpc.addMethod('send_transfer', this._handleSendTransfer)
+    this._rpc.addMethod('fulfill_condition', this._handleFulfillCondition)
+    this._rpc.addMethod('reject_incoming_transfer', this._handleRejectIncomingTransfer)
+  }
+
+  async connect () {
+    await this._inFlight.connect()
+
+    try {
+      const lightningInfo = await this._lightning.getInfoAsync({})
+      this._publicKey = lightningInfo.identity_pubkey
+      // TODO set the address based on whether it's running on the testnet and also include bitcoin/litecoin
+      this._prefix = 'g.crypto.lightning.' + ((this._publicKey > this._peerPublicKey)
+        ? this._publicKey + '~' + this._peerPublicKey
+        : this._peerPublicKey + '~' + this._publicKey) + '.'
+    } catch (err) {
+      debug('error connecting to lnd', err)
+      throw err
+    }
+
+    this._connected = true
+    shared.Util.safeEmit(this, 'connect')
+  }
+
+  isConnected () {
+    return !!this._connected
+  }
+
+  async disconnect () {
+    shared.Util.safeEmit(this, 'disconnect')
+  }
+
+  getAccount () {
+    return this._prefix + this._publicKey
+  }
+
+  getInfo () {
+    return {
+      prefix: this._prefix,
+      // TODO set currency code based on network
+      currencyCode: 'BTC',
+      currencyScale: 8,
+      connectors: [ this._prefix + this._peerPublicKey ]
+    }
+  }
+
+  async sendMessage (_message) {
+    const message = this._validator.normalizeOutgoingMessage(_message)
+    await this._rpc.call('send_message', this._prefix, [ message ])
+    shared.Util.safeEmit(this, 'outgoing_message', message)
+  }
+
+  async _handleSendMessage (_message) {
+    const message = this._validator.normalizeIncomingMessage(_message)
+    shared.Util.safeEmit(this, 'incoming_message', message)
+    return true
+  }
+
+  async sendTransfer (_transfer) {
+    const transfer = this._validator.normalizeOutgoingTransfer(_transfer)
+    // TODO: wrap these into just one method
+    const noRepeat = (this._transfers.cacheOutgoing(transfer) &&
+      (await this._transfers.notInStore(transfer)))
+
+    await this._rpc.call('send_transfer', this._prefix, [
+      // TODO: util method for this?
+      Object.assign({}, transfer, { noteToSelf: undefined })
+    ])
+    debug(transfer.id + ' acknowledged by peer')
+
+    // TODO: is all this repeat stuff totally necessary?
+    if (!noRepeat) return
+
+    shared.Util.safeEmit(this, 'outgoing_prepare', transfer)
+    this._setupTransferExpiry(transfer.id, transfer.expiresAt)
+  }
+
+  async _handleSendTransfer (_transfer) {
+    const transfer = this._validator.normalizeIncomingTransfer(_transfer)
+    // TODO: wrap these into just one method
+    const noRepeat = (this._transfers.cacheIncoming(transfer) &&
+      (await this._transfers.notInStore(transfer)))
+
+    if (!noRepeat) return true
+
+    await this._inFlight.add(transfer.amount)
+      .catch((e) => {
+        this._transfers.cancel(transfer.id)
+        throw e
+      })
+
+    shared.Util.safeEmit(this, 'incoming_prepare', transfer)
+    this._setupTransferExpiry(transfer.id, transfer.expiresAt)
+    return true
+  }
+
+  async fulfillCondition (transferId, fulfillment) {
+    // TODO: check out that method
+    this._validator.validateFulfillment(fulfillment)
+
+    // TODO: what even is this construct and why did I do it
+    const error = this._transfers.assertAllowedChange(transferId, 'executed')
+    if (error) {
+      await error
+      await this._rpc.call('fulfill_condition', this._prefix, [ transferId, fulfillment ])
+      return
+    }
+
+    // TODO: what does this do and is it needed?
+    this._transfers.assertIncoming(transferId)
+    // TODO: make the error on this better when the transfer isn't found
+    const transfer = this._transfers.get(transferId)
+    shared.Util.safeEmit(this, 'incoming_fulfill', transfer, fulfillment)
+
+    // Generate a lightning invoice and give it to the sender along with the fulfillment
+    const lightningInvoice = this._createLightningInvoice(transfer)
+    let result
+    try {
+      result = await this._rpc.call('fulfill_condition', this._prefix, [transferId, fulfillment, lightningInvoice.payment_request])
+      if (!result || !result.payment_preimage || Buffer.compare(result.payment_preimage, lightningInvoice.r_hash) !== 0) {
+        debug('lightning payment preimage does not match invoice. invoice: ', lightningInvoice, 'result:', result)
+        throw new Error('lightning invoice was not paid, got result: ' + JSON.stringify(result))
+      }
+    } catch (err) {
+      debug('failed to get claim from peer. keeping the in-flight balance up.', err)
+      return
+    }
+    debug('peer paid us for transfer: ' + transfer.id, result)
+    this._transfers.fulfill(transferId, fulfillment)
+    debug('fulfilled from store')
+  }
+
+  async _handleFulfillCondition (transferId, fulfillment, lightningInvoice) {
+    this._validator.validateFulfillment(fulfillment)
+
+    const error = this._transfers.assertAllowedChange(transferId, 'executed')
+    if (error) {
+      await error
+      // TODO: return an error instead, so it gives better error?
+      return true
+    }
+
+    this._transfers.assertOutgoing(transferId)
+    const transfer = this._transfers.get(transferId)
+    transfer.direction = 'outgoing' // the connector needs this for whatever reason
+    debug('fetched transfer for fulfill:', transfer)
+
+    this._validateFulfillment(fulfillment, transfer.executionCondition)
+    this._transfers.fulfill(transferId, fulfillment)
+    debug('fulfilled from store')
+    shared.Util.safeEmit(this, 'outgoing_fulfill', transfer, fulfillment)
+
+    debug('sending lightning payment')
+    // TODO validate that invoice matches transfer
+    const transferProof = await this._payLightningInvoice(lightningInvoice)
+    return transferProof
+  }
+
+  _validateFulfillment (fulfillment, condition) {
+    const hash = shared.Util.base64url(crypto
+      .createHash('sha256')
+      .update(Buffer.from(fulfillment, 'base64'))
+      .digest())
+
+    // TODO: validate the condition to make sure it's base64url
+    if (hash !== condition) {
+      throw new NotAcceptedError('fulfillment ' + fulfillment +
+        ' does not match condition ' + condition)
+    }
+  }
+
+  async rejectIncomingTransfer (transferId, reason) {
+    const error = this._transfers.assertAllowedChange(transferId, 'cancelled')
+    if (error) {
+      await error
+      await this._rpc.call('reject_incoming_transfer', this._prefix, [transferId, reason])
+      return
+    }
+
+    debug('rejecting', transfer.id)
+    this._transfers.assertIncoming(transferId)
+    const transfer = this._transfers.get(transferId)
+
+    this._transfers.cancel(transferId)
+    shared.Util.safeEmit(this, 'incoming_reject', transfer)
+    await this._inFlight.sub(transfer.amount)
+    await this._rpc.call('reject_incoming_transfer', this._prefix, [ transferId, reason ])
+  }
+
+  async _handleRejectIncomingTransfer (transferId, reason) {
+    const error = this._transfers.assertAllowedChange(transferId, 'cancelled')
+    if (error) {
+      await error
+      return true
+    }
+
+    this._transfers.assertOutgoing(transferId)
+    const transfer = this._transfers.get(transferId)
+
+    this._transfers.cancel(transferId)
+    shared.Util.safeEmit(this, 'outgoing_reject', transfer)
+    return true
+  }
+
+  _setupTransferExpiry (transferId, expiresAt) {
+    const expiry = Date.parse(expiresAt)
+    const now = Date.now()
+
+    setTimeout(
+      this._expireTransfer.bind(this, transferId),
+      (expiry - now))
+  }
+
+  async _expireTransfer (transferId) {
+    debug('checking expiry on ' + transferId)
+
+    // TODO: use a less confusing construct
+    try {
+      const error = this._transfers.assertAllowedChange(transferId, 'cancelled')
+      if (error) {
+        await error
+        return
+      }
+    } catch (e) {
+      debug(e.message)
+      return
+    }
+
+    const cached = this._transfers._getCachedTransferWithInfo(transferId)
+    this._transfers.cancel(transferId)
+
+    if (cached.isIncoming) {
+      this._inFlight.sub(cached.transfer.amount)
+    }
+
+    shared.Util.safeEmit(this, (cached.isIncoming ? 'incoming' : 'outgoing') + '_cancel',
+      cached.transfer)
+  }
+
+  async _createLightningInvoice (transfer) {
+    const invoice = await new Promise((resolve, reject) => {
+      this._lightning.addInvoice({
+        value: transfer.amount,
+        payment_request: transfer.id
+      }, (err, res) => {
+        if (err) return reject(err)
+        resolve(res)
+      })
+    })
+    return invoice
+  }
+
+  async _payLightningInvoice (paymentRequest) {
+    const result = await new Promise((resolve, reject) => {
+      this._lightning.sendPaymentSync({
+        payment_request: paymentRequest
+      }, (err, res) => {
+        if (err) return reject(err)
+        resolve(res)
+      })
+    })
+    return result
+  }
+}
+
