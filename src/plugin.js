@@ -7,7 +7,7 @@ const shared = require('ilp-plugin-shared')
 const crypto = require('crypto')
 const InvalidFieldsError = shared.Errors.InvalidFieldsError
 
-const lnrpcDescriptor = grpc.load('./rpc.proto')
+const lnrpcDescriptor = grpc.load(__dirname + '/rpc.proto')
 const lnrpc = lnrpcDescriptor.lnrpc
 
 module.exports = class PluginLightning extends EventEmitter {
@@ -26,13 +26,15 @@ module.exports = class PluginLightning extends EventEmitter {
       throw new InvalidFieldsError('missing opts.rpcUri')
     } else if (!peerPublicKey) {
       throw new InvalidFieldsError('missing opts.peerPublicKey')
+    } else if (!maxInFlight) {
+      throw new InvalidFieldsError('missing opts.maxInFlight')
     } else if (!lndUri) {
       throw new InvalidFieldsError('missing opts.lndUri')
     } else if (!_store) {
       throw new InvalidFieldsError('missing opts._store')
     }
 
-    this._peerPublicKey = opts.peerPublicKey
+    this._peerPublicKey = peerPublicKey
 
     // TODO: make the balance right, and have it be configurable
     this._inFlight = new shared.Balance({ store: _store, maximum: maxInFlight })
@@ -60,7 +62,12 @@ module.exports = class PluginLightning extends EventEmitter {
     await this._inFlight.connect()
 
     try {
-      const lightningInfo = await this._lightning.getInfoAsync({})
+      const lightningInfo = await new Promise((resolve, reject) => {
+        this._lightning.getInfo({}, (err, info) => {
+          if (err) return reject(err)
+          resolve(info)
+        })
+      })
       this._publicKey = lightningInfo.identity_pubkey
       // TODO set the address based on whether it's running on the testnet and also include bitcoin/litecoin
       this._prefix = 'g.crypto.lightning.' + ((this._publicKey > this._peerPublicKey)
@@ -166,7 +173,7 @@ module.exports = class PluginLightning extends EventEmitter {
     shared.Util.safeEmit(this, 'incoming_fulfill', transfer, fulfillment)
 
     // Generate a lightning invoice and give it to the sender along with the fulfillment
-    const lightningInvoice = this._createLightningInvoice(transfer)
+    const lightningInvoice = await this._createLightningInvoice(transfer)
     let result
     try {
       result = await this._rpc.call('fulfill_condition', this._prefix, [transferId, fulfillment, lightningInvoice.payment_request])
@@ -300,19 +307,26 @@ module.exports = class PluginLightning extends EventEmitter {
         resolve(res)
       })
     })
+    debug('created lightning invoice:', invoice)
     return invoice
   }
 
   async _payLightningInvoice (paymentRequest) {
-    const result = await new Promise((resolve, reject) => {
-      this._lightning.sendPaymentSync({
-        payment_request: paymentRequest
-      }, (err, res) => {
-        if (err) return reject(err)
-        resolve(res)
+    try {
+      const result = await new Promise((resolve, reject) => {
+        this._lightning.sendPaymentSync({
+          payment_request: paymentRequest
+        }, (err, res) => {
+          if (err) return reject(err)
+          resolve(res)
+        })
       })
-    })
-    return result
+      debug('paid lightning invoice: ' + paymentRequest + ' got result:', result)
+      return result
+    } catch (err) {
+      debug('error sending lightning payment for payment request:',paymentRequest, err)
+      throw err
+    }
   }
 }
 
