@@ -6,6 +6,7 @@ const EventEmitter = require('eventemitter2')
 const shared = require('ilp-plugin-shared')
 const crypto = require('crypto')
 const InvalidFieldsError = shared.Errors.InvalidFieldsError
+const NotAcceptedError = shared.Errors.NotAcceptedError
 
 const lnrpcDescriptor = grpc.load(__dirname + '/rpc.proto')
 const lnrpc = lnrpcDescriptor.lnrpc
@@ -70,9 +71,10 @@ module.exports = class PluginLightning extends EventEmitter {
       })
       this._publicKey = lightningInfo.identity_pubkey
       // TODO set the address based on whether it's running on the testnet and also include bitcoin/litecoin
-      this._prefix = 'g.crypto.lightning.' + ((this._publicKey > this._peerPublicKey)
-        ? this._publicKey + '~' + this._peerPublicKey
-        : this._peerPublicKey + '~' + this._publicKey) + '.'
+      //this._prefix = 'g.crypto.lightning.' + ((this._publicKey > this._peerPublicKey)
+        //? this._publicKey + '~' + this._peerPublicKey
+        //: this._peerPublicKey + '~' + this._publicKey) + '.'
+      this._prefix = 'g.crypto.lightning.'
     } catch (err) {
       debug('error connecting to lnd', err)
       throw err
@@ -92,6 +94,17 @@ module.exports = class PluginLightning extends EventEmitter {
 
   getAccount () {
     return this._prefix + this._publicKey
+  }
+
+  async getBalance () {
+    const balance = await new Promise((resolve, reject) => {
+      this._lightning.channelBalance({}, (err, res) => {
+        if (err) return reject(err)
+        resolve(res.balance)
+      })
+    })
+    debug('balance is now:', balance)
+    return balance
   }
 
   getInfo () {
@@ -174,20 +187,19 @@ module.exports = class PluginLightning extends EventEmitter {
 
     // Generate a lightning invoice and give it to the sender along with the fulfillment
     const lightningInvoice = await this._createLightningInvoice(transfer)
-    let result
+    let paymentPreimage
     try {
-      result = await this._rpc.call('fulfill_condition', this._prefix, [transferId, fulfillment, lightningInvoice.payment_request])
-      if (!result || !result.payment_preimage || Buffer.compare(result.payment_preimage, lightningInvoice.r_hash) !== 0) {
-        debug('lightning payment preimage does not match invoice. invoice: ', lightningInvoice, 'result:', result)
-        throw new Error('lightning invoice was not paid, got result: ' + JSON.stringify(result))
+      paymentPreimage = await this._rpc.call('fulfill_condition', this._prefix, [transferId, fulfillment, lightningInvoice.payment_request])
+      if (Buffer.compare(hash(paymentPreimage), lightningInvoice.r_hash) !== 0) {
+        debug(`lightning payment preimage does not match invoice. preimage received: ${paymentPreimage}, invoice hash: ${invoiceHash}`)
+        throw new Error('lightning invoice was not paid, got paymentPreimage: ' + JSON.stringify(paymentPreimage))
       }
     } catch (err) {
       debug('failed to get claim from peer. keeping the in-flight balance up.', err)
       return
     }
-    debug('peer paid us for transfer: ' + transfer.id, result)
+    debug(`peer paid us for transfer: ${transfer.id}, payment preimage: ${paymentPreimage}`)
     this._transfers.fulfill(transferId, fulfillment)
-    debug('fulfilled from store')
   }
 
   async _handleFulfillCondition (transferId, fulfillment, lightningInvoice) {
@@ -212,8 +224,15 @@ module.exports = class PluginLightning extends EventEmitter {
 
     debug('sending lightning payment')
     // TODO validate that invoice matches transfer
-    const transferProof = await this._payLightningInvoice(lightningInvoice)
-    return transferProof
+    const result = await this._payLightningInvoice(lightningInvoice, transfer)
+    if (!result.payment_route) {
+      debug('error sending lightning payment', JSON.stringify(result))
+      throw new Error('error sending payment: ' + result.payment_error)
+    }
+
+    const paymentPreimage = shared.Util.base64url(result.payment_preimage)
+    debug('got lightning payment preimage: ' + paymentPreimage)
+    return paymentPreimage
   }
 
   _validateFulfillment (fulfillment, condition) {
@@ -311,7 +330,9 @@ module.exports = class PluginLightning extends EventEmitter {
     return invoice
   }
 
-  async _payLightningInvoice (paymentRequest) {
+  async _payLightningInvoice (paymentRequest, transfer) {
+    // TODO check to make sure invoice isn't more than transfer amount
+    // TODO can we check how much it's going to cost before sending? what if the fees are really high?
     try {
       const result = await new Promise((resolve, reject) => {
         this._lightning.sendPaymentSync({
@@ -328,5 +349,11 @@ module.exports = class PluginLightning extends EventEmitter {
       throw err
     }
   }
+}
+
+function hash (preimage) {
+  const h = crypto.createHash('sha256')
+  h.update(Buffer.from(preimage, 'base64'))
+  return h.digest()
 }
 
