@@ -103,7 +103,7 @@ module.exports = class PluginLightning extends EventEmitter {
         resolve(res.balance)
       })
     })
-    debug('balance is now:', balance)
+    debug('channel balance:', balance)
     return balance
   }
 
@@ -135,6 +135,7 @@ module.exports = class PluginLightning extends EventEmitter {
     const noRepeat = (this._transfers.cacheOutgoing(transfer) &&
       (await this._transfers.notInStore(transfer)))
 
+    // TODO if this is a repeat transfer, is this going to cause us to send it twice?
     await this._rpc.call('send_transfer', this._prefix, [
       // TODO: util method for this?
       Object.assign({}, transfer, { noteToSelf: undefined })
@@ -198,7 +199,7 @@ module.exports = class PluginLightning extends EventEmitter {
       debug('failed to get claim from peer. keeping the in-flight balance up.', err)
       return
     }
-    debug(`peer paid us for transfer: ${transfer.id}, payment preimage: ${paymentPreimage}`)
+    debug(`peer paid us ${transfer.amount} for transfer: ${transfer.id}, payment preimage: ${paymentPreimage}`)
     this._transfers.fulfill(transferId, fulfillment)
   }
 
@@ -256,7 +257,7 @@ module.exports = class PluginLightning extends EventEmitter {
       return
     }
 
-    debug('rejecting', transfer.id)
+    debug('rejecting', transferId)
     this._transfers.assertIncoming(transferId)
     const transfer = this._transfers.get(transferId)
 
@@ -282,6 +283,7 @@ module.exports = class PluginLightning extends EventEmitter {
   }
 
   _setupTransferExpiry (transferId, expiresAt) {
+    debug(`set transfer ${transferId} to expire at ${expiresAt}`)
     const expiry = Date.parse(expiresAt)
     const now = Date.now()
 
@@ -307,6 +309,7 @@ module.exports = class PluginLightning extends EventEmitter {
 
     const cached = this._transfers._getCachedTransferWithInfo(transferId)
     this._transfers.cancel(transferId)
+    debug(`expired transfer ${transferId}`)
 
     if (cached.isIncoming) {
       this._inFlight.sub(cached.transfer.amount)
@@ -317,6 +320,7 @@ module.exports = class PluginLightning extends EventEmitter {
   }
 
   async _createLightningInvoice (transfer) {
+    // TODO when should the lightning invoice expire?
     const invoice = await new Promise((resolve, reject) => {
       this._lightning.addInvoice({
         value: transfer.amount,

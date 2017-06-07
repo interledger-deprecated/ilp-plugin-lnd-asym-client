@@ -10,14 +10,14 @@ const moment = require('moment')
 const crypto = require('crypto')
 
 const sender = new Plugin({
-  peerPublicKey: '02770c79e7eef629aabd4c84396e5cf632893d44dea7248a894f4e80b6cf77060e',
+  peerPublicKey: '037c7d6b68302d53793d8aa8d5a83299239e3a148387bba64589873fe9a376c0ba',
   lndUri: 'localhost:11009',
   rpcUri: 'http://localhost:9002/rpc',
   maxInFlight: 100000000,
   _store: new shared.ObjStore()
 })
 const receiver = new Plugin({
-  peerPublicKey: '037c7d6b68302d53793d8aa8d5a83299239e3a148387bba64589873fe9a376c0ba',
+  peerPublicKey: '02770c79e7eef629aabd4c84396e5cf632893d44dea7248a894f4e80b6cf77060e',
   lndUri: 'localhost:12009',
   rpcUri: 'http://localhost:9001/rpc',
   maxInFlight: 100000000,
@@ -123,7 +123,7 @@ async function runTest () {
   }))
   console.log(`sender balance is: ${await sender.getBalance()}, receiver balance is: ${await receiver.getBalance()}`)
   const timedOutPromise = new Promise((resolve) => {
-    sender.once('outgoing_reject', (transfer, rejectionMessage) => {
+    sender.once('outgoing_cancel', (transfer, rejectionMessage) => {
       console.log('sender got outgoing_reject notification with message:', rejectionMessage)
       resolve()
     })
@@ -132,11 +132,6 @@ async function runTest () {
   console.log(`sender balance is: ${await sender.getBalance()}, receiver balance is: ${await receiver.getBalance()}`)
 
   console.log('sending a transfer the receiver will reject')
-  const transferToReject = await sender.sendTransfer(Object.assign({}, transfer, {
-    id: uuid(),
-    expiresAt: moment().add(10, 'seconds').toISOString()
-  }))
-
   receiver.once('incoming_prepare', (transfer) => {
     console.log('receiver got prepared notification, now rejecting transfer')
     receiver.rejectIncomingTransfer(transfer.id, {
@@ -147,6 +142,12 @@ async function runTest () {
       triggeredAt: moment().toISOString()
     })
   })
+
+  const transferToReject = await sender.sendTransfer(Object.assign({}, transfer, {
+    id: uuid(),
+    expiresAt: moment().add(10, 'seconds').toISOString()
+  }))
+
 
   const rejectedPromise = new Promise((resolve) => {
     sender.once('outgoing_reject', (transfer, rejectionMessage) => {
