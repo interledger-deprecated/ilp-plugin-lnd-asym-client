@@ -19,6 +19,7 @@ module.exports = class PluginLightning extends EventEmitter {
     peerPublicKey,
     lndUri,
     maxInFlight,
+    network,
     _store,
   }) {
     super()
@@ -36,6 +37,7 @@ module.exports = class PluginLightning extends EventEmitter {
     }
 
     this._peerPublicKey = peerPublicKey
+    this._network = network
 
     // TODO: make the balance right, and have it be configurable
     this._inFlight = new shared.Balance({ store: _store, maximum: maxInFlight })
@@ -69,12 +71,17 @@ module.exports = class PluginLightning extends EventEmitter {
           resolve(info)
         })
       })
+      console.log('info', lightningInfo)
       this._publicKey = lightningInfo.identity_pubkey
-      // TODO set the address based on whether it's running on the testnet and also include bitcoin/litecoin
+      this._network = this._network || lightningInfo.chains[0]
       //this._prefix = 'g.crypto.lightning.' + ((this._publicKey > this._peerPublicKey)
         //? this._publicKey + '~' + this._peerPublicKey
         //: this._peerPublicKey + '~' + this._publicKey) + '.'
-      this._prefix = 'g.crypto.lightning.'
+      const scheme = lightningInfo.testnet
+        ? 'test.'
+        : 'g.'
+      const neighborhood = this._network + '.lightning.'
+      this._prefix = scheme + neighborhood
     } catch (err) {
       debug('error connecting to lnd', err)
       throw err
@@ -108,10 +115,18 @@ module.exports = class PluginLightning extends EventEmitter {
   }
 
   getInfo () {
+    let currencyCode
+    if (this._network === 'bitcoin') {
+      currencyCode = 'BTC'
+    } else if (this._network === 'litecoin') {
+      currencyCode = 'LTC'
+    } else {
+      currencyCode = '???'
+    }
     return {
       prefix: this._prefix,
       // TODO set currency code based on network
-      currencyCode: 'BTC',
+      currencyCode,
       currencyScale: 8,
       connectors: [ this._prefix + this._peerPublicKey ]
     }
