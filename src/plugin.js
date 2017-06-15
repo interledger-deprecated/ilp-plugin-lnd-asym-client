@@ -52,7 +52,8 @@ module.exports = class PluginLightning extends EventEmitter {
     })
 
     // TODO add credentials
-    this._lightning = new lnrpc.Lightning(lndUri || 'localhost:10009', grpc.credentials.createInsecure())
+    this._lndUri = lndUri || 'localhost:10009'
+    this._lightning = new lnrpc.Lightning(this._lndUri, grpc.credentials.createInsecure())
 
     this.receive = this._rpc.receive.bind(this._rpc)
     this._rpc.addMethod('send_message', this._handleSendMessage)
@@ -65,13 +66,14 @@ module.exports = class PluginLightning extends EventEmitter {
     await this._inFlight.connect()
 
     try {
+      debug('connecting to lnd:', this._lndUri)
       const lightningInfo = await new Promise((resolve, reject) => {
         this._lightning.getInfo({}, (err, info) => {
           if (err) return reject(err)
           resolve(info)
         })
       })
-      console.log('info', lightningInfo)
+      debug('got lnd info:', lightningInfo)
       this._publicKey = lightningInfo.identity_pubkey
       this._network = this._network || lightningInfo.chains[0]
       //this._prefix = 'g.crypto.lightning.' + ((this._publicKey > this._peerPublicKey)
@@ -87,6 +89,7 @@ module.exports = class PluginLightning extends EventEmitter {
       throw err
     }
 
+    debug('connected to lnd:', this._lndUri)
     this._connected = true
     shared.Util.safeEmit(this, 'connect')
   }
@@ -207,7 +210,7 @@ module.exports = class PluginLightning extends EventEmitter {
     try {
       paymentPreimage = await this._rpc.call('fulfill_condition', this._prefix, [transferId, fulfillment, lightningInvoice.payment_request])
       if (Buffer.compare(hash(paymentPreimage), lightningInvoice.r_hash) !== 0) {
-        debug(`lightning payment preimage does not match invoice. preimage received: ${paymentPreimage}, invoice hash: ${invoiceHash}`)
+        debug(`lightning payment preimage does not match invoice. preimage received: ${paymentPreimage}, invoice hash: ${lightningInvoice.r_hash.toString('hex')}`)
         throw new Error('lightning invoice was not paid, got paymentPreimage: ' + JSON.stringify(paymentPreimage))
       }
     } catch (err) {
@@ -238,16 +241,8 @@ module.exports = class PluginLightning extends EventEmitter {
     debug('fulfilled from store')
     shared.Util.safeEmit(this, 'outgoing_fulfill', transfer, fulfillment)
 
-    debug('sending lightning payment')
     // TODO validate that invoice matches transfer
-    const result = await this._payLightningInvoice(lightningInvoice, transfer)
-    if (!result.payment_route) {
-      debug('error sending lightning payment', JSON.stringify(result))
-      throw new Error('error sending payment: ' + result.payment_error)
-    }
-
-    const paymentPreimage = shared.Util.base64url(result.payment_preimage)
-    debug('got lightning payment preimage: ' + paymentPreimage)
+    const paymentPreimage = await this._payLightningInvoice(lightningInvoice, transfer)
     return paymentPreimage
   }
 
@@ -345,15 +340,17 @@ module.exports = class PluginLightning extends EventEmitter {
         resolve(res)
       })
     })
-    debug('created lightning invoice:', invoice)
+    debug('created lightning invoice:', invoice, 'for transfer:', transfer)
     return invoice
   }
 
   async _payLightningInvoice (paymentRequest, transfer) {
     // TODO check to make sure invoice isn't more than transfer amount
     // TODO can we check how much it's going to cost before sending? what if the fees are really high?
+    debug('sending lightning payment for payment request: ' + paymentRequest)
+    let result
     try {
-      const result = await new Promise((resolve, reject) => {
+      result = await new Promise((resolve, reject) => {
         this._lightning.sendPaymentSync({
           payment_request: paymentRequest
         }, (err, res) => {
@@ -361,11 +358,17 @@ module.exports = class PluginLightning extends EventEmitter {
           resolve(res)
         })
       })
-      debug('paid lightning invoice: ' + paymentRequest + ' got result:', result)
-      return result
     } catch (err) {
-      debug('error sending lightning payment for payment request:',paymentRequest, err)
+      debug('error sending lightning payment for payment request:', paymentRequest, err)
       throw err
+    }
+
+    if (result.payment_route && result.payment_preimage) {
+      debug('sent lightning payment for payment request: ' + paymentRequest + ', got payment preimage:', result.payment_preimage.toString('hex'))
+      return result.payment_preimage.toString('hex')
+    } else {
+      debug('error sending lightning payment:', result)
+      throw new Error('error sending payment:' + result.payment_error)
     }
   }
 }
