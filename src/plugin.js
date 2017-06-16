@@ -346,17 +346,17 @@ module.exports = class PluginLightning extends EventEmitter {
   }
 
   async _payLightningInvoice (paymentRequest, transfer) {
-    // TODO check to make sure invoice isn't more than transfer amount
     // TODO can we check how much it's going to cost before sending? what if the fees are really high?
     debug('sending lightning payment for payment request: ' + paymentRequest)
-    let decodedReq = decodePaymentRequest(paymentRequest)
-    let amountDiff = Math.abs(decodedReq.amount - transfer.amount)
+
+    // Check that the invoice amount matches the transfer amount
+    const decodedReq = decodePaymentRequest(paymentRequest)
+    const amountDiff = Math.abs(decodedReq.amount - transfer.amount)
     if (amountDiff > 0.05 * transfer.amount) {
-      debug('amounts in payment request and in transfer are significantly different')
-      debug('amount in payment request is ' + decodedReq.amount)
-      debug('amount in transfer is ' + transfer.amount)
-      throw Error('amounts in payment request and in transfer are significantly different')
+      debug('amounts in payment request and in transfer are significantly different:', decodedReq, transfer)
+      throw new Error(`amounts in payment request and in transfer are significantly different. transfer amount: ${transfer.amount}, payment request amount: ${decodedReq.amount}`)
     }
+
     let result
     try {
       result = await new Promise((resolve, reject) => {

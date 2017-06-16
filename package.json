@@ -17,7 +17,6 @@
   "author": "Evan Schwartz <evan@ripple.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "co-mocha": "^1.2.0",
     "debug": "^2.6.8",
     "eventemitter2": "^4.1.0",
     "fast-crc32c": "^1.0.4",
