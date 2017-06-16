@@ -5,11 +5,13 @@ const debug = require('debug')('ilp-plugin-lightning')
 const EventEmitter = require('eventemitter2')
 const shared = require('ilp-plugin-shared')
 const crypto = require('crypto')
+const DecodePaymentRequest = require("./reqdecode").DecodePaymentRequest
 const InvalidFieldsError = shared.Errors.InvalidFieldsError
 const NotAcceptedError = shared.Errors.NotAcceptedError
 
 const lnrpcDescriptor = grpc.load(__dirname + '/rpc.proto')
 const lnrpc = lnrpcDescriptor.lnrpc
+
 
 module.exports = class PluginLightning extends EventEmitter {
   constructor ({
@@ -334,7 +336,8 @@ module.exports = class PluginLightning extends EventEmitter {
     const invoice = await new Promise((resolve, reject) => {
       this._lightning.addInvoice({
         value: transfer.amount,
-        payment_request: transfer.id
+
+        // payment_request: transfer.id
       }, (err, res) => {
         if (err) return reject(err)
         resolve(res)
@@ -348,6 +351,14 @@ module.exports = class PluginLightning extends EventEmitter {
     // TODO check to make sure invoice isn't more than transfer amount
     // TODO can we check how much it's going to cost before sending? what if the fees are really high?
     debug('sending lightning payment for payment request: ' + paymentRequest)
+    let decodedReq = DecodePaymentRequest(paymentRequest)
+    let amountDiff = Math.abs(decodedReq.amount - transfer.amount)
+    if (amountDiff > 0.05 * transfer.amount) {
+      debug('amounts in payment request and in transfer are significantly different')
+      debug('amount in payment request is ' + decodedReq.amount)
+      debug('amount in transfer is '+ transfer.amount)
+      throw Error('amounts in payment request and in transfer are significantly different')
+    }
     let result
     try {
       result = await new Promise((resolve, reject) => {
@@ -375,7 +386,7 @@ module.exports = class PluginLightning extends EventEmitter {
 
 function hash (preimage) {
   const h = crypto.createHash('sha256')
-  h.update(Buffer.from(preimage, 'base64'))
+  h.update(Buffer.from(preimage, 'hex'))
   return h.digest()
 }
 
