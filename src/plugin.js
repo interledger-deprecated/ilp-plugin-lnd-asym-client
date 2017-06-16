@@ -5,13 +5,13 @@ const debug = require('debug')('ilp-plugin-lightning')
 const EventEmitter = require('eventemitter2')
 const shared = require('ilp-plugin-shared')
 const crypto = require('crypto')
-const DecodePaymentRequest = require("./reqdecode").DecodePaymentRequest
+const path = require('path')
+const decodePaymentRequest = require('./reqdecode').decodePaymentRequest
 const InvalidFieldsError = shared.Errors.InvalidFieldsError
 const NotAcceptedError = shared.Errors.NotAcceptedError
 
-const lnrpcDescriptor = grpc.load(__dirname + '/rpc.proto')
+const lnrpcDescriptor = grpc.load(path.join(__dirname, 'rpc.proto'))
 const lnrpc = lnrpcDescriptor.lnrpc
-
 
 module.exports = class PluginLightning extends EventEmitter {
   constructor ({
@@ -22,7 +22,7 @@ module.exports = class PluginLightning extends EventEmitter {
     lndUri,
     maxInFlight,
     network,
-    _store,
+    _store
   }) {
     super()
 
@@ -78,14 +78,14 @@ module.exports = class PluginLightning extends EventEmitter {
       debug('got lnd info:', lightningInfo)
       this._publicKey = lightningInfo.identity_pubkey
       this._network = this._network || lightningInfo.chains[0]
-      //this._prefix = 'g.crypto.lightning.' + ((this._publicKey > this._peerPublicKey)
-        //? this._publicKey + '~' + this._peerPublicKey
-        //: this._peerPublicKey + '~' + this._publicKey) + '.'
       const scheme = lightningInfo.testnet
         ? 'test.'
         : 'g.'
       const neighborhood = this._network + '.lightning.'
       this._prefix = scheme + neighborhood
+      // TODO add public keys to prefix, because this is just a bilateral channel
+      // right now we can't send to anyone on lightning, because we need a way to message
+      // the other plugins aside from using HTTP RPC
     } catch (err) {
       debug('error connecting to lnd', err)
       throw err
@@ -335,9 +335,7 @@ module.exports = class PluginLightning extends EventEmitter {
     // TODO when should the lightning invoice expire?
     const invoice = await new Promise((resolve, reject) => {
       this._lightning.addInvoice({
-        value: transfer.amount,
-
-        // payment_request: transfer.id
+        value: transfer.amount
       }, (err, res) => {
         if (err) return reject(err)
         resolve(res)
@@ -351,12 +349,12 @@ module.exports = class PluginLightning extends EventEmitter {
     // TODO check to make sure invoice isn't more than transfer amount
     // TODO can we check how much it's going to cost before sending? what if the fees are really high?
     debug('sending lightning payment for payment request: ' + paymentRequest)
-    let decodedReq = DecodePaymentRequest(paymentRequest)
+    let decodedReq = decodePaymentRequest(paymentRequest)
     let amountDiff = Math.abs(decodedReq.amount - transfer.amount)
     if (amountDiff > 0.05 * transfer.amount) {
       debug('amounts in payment request and in transfer are significantly different')
       debug('amount in payment request is ' + decodedReq.amount)
-      debug('amount in transfer is '+ transfer.amount)
+      debug('amount in transfer is ' + transfer.amount)
       throw Error('amounts in payment request and in transfer are significantly different')
     }
     let result
@@ -389,4 +387,3 @@ function hash (preimage) {
   h.update(Buffer.from(preimage, 'hex'))
   return h.digest()
 }
-

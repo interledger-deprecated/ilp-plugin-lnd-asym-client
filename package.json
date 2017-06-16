@@ -4,7 +4,8 @@
   "description": "Interledger.js Ledger Plugin for the Lightning Network",
   "main": "src/plugin.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "mocha test/*",
+    "lint": "standard src/*.js"
   },
   "keywords": [
     "interledger",
@@ -16,20 +17,21 @@
   "author": "Evan Schwartz <evan@ripple.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "co-mocha": "^1.2.0",
     "debug": "^2.6.8",
     "eventemitter2": "^4.1.0",
-    "grpc": "^1.3.7",
-    "arraybuffer-equal": "^1.0.4",
-    "int64-buffer": "^0.1.9",
-    "text-encoding": "^0.6.4",
     "fast-crc32c": "^1.0.4",
-    "ilp-plugin-shared": "https://github.com/interledgerjs/ilp-plugin-shared.git"
+    "grpc": "^1.3.7",
+    "ilp-plugin-shared": "https://github.com/interledgerjs/ilp-plugin-shared.git",
+    "int64-buffer": "^0.1.9",
+    "text-encoding": "^0.6.4"
   },
   "devDependencies": {
     "koa": "^2.2.0",
     "koa-bodyparser": "^4.2.0",
     "koa-router": "^7.2.0",
     "moment": "^2.18.1",
+    "standard": "^10.0.2",
     "uuid": "^3.0.1"
   }
 }
