@@ -8,14 +8,14 @@ const BigNumber = require('bignumber.js')
 const decodePaymentRequest = require('./reqdecode').decodePaymentRequest
 const shared = require('ilp-plugin-shared')
 const { InvalidFieldsError, NotAcceptedError } = shared.Errors
-const { MakePaymentChannelPlugin } = require('ilp-plugin-payment-channel-framework')
+const { makePaymentChannelPlugin } = require('ilp-plugin-payment-channel-framework')
 
 const lnrpcDescriptor = grpc.load(path.join(__dirname, 'rpc.proto'))
 const lnrpc = lnrpcDescriptor.lnrpc
 
 const GET_INVOICE_RPC_METHOD = '_get_lightning_invoice'
 
-module.exports = MakePaymentChannelPlugin({
+module.exports = makePaymentChannelPlugin({
   pluginName: 'lightning',
 
   constructor: function (ctx, opts) {
@@ -45,7 +45,10 @@ module.exports = MakePaymentChannelPlugin({
         amount,
         executionCondition: invoice.r_hash
       })
-      return invoice.payment_request
+      debug('created lightning invoice:', invoice.payment_request, 'for amount:', amount)
+      return {
+        paymentRequest: invoice.payment_request
+      }
     })
   },
 
@@ -124,10 +127,9 @@ module.exports = MakePaymentChannelPlugin({
   },
 
   createOutgoingClaim: async function (ctx, outgoingBalance) {
-    const lastPaid = await ctx.state.amountSettled.setIfMax({ value: outgoingBalance, data: null })
-    console.log(lastPaid, outgoingBalance)
+    const lastPaid = (await ctx.state.amountSettled.setIfMax({ value: outgoingBalance, data: null })).value
     const amountToPay = new BigNumber(outgoingBalance)
-      .minus(lastPaid.value)
+      .minus(lastPaid)
 
     debug(`createOutgoingClaim: last paid: ${lastPaid} amountToPay: ${amountToPay}`)
 
@@ -137,7 +139,9 @@ module.exports = MakePaymentChannelPlugin({
 
     let paymentRequest
     try {
-      paymentRequest = await ctx.rpc.call(GET_INVOICE_RPC_METHOD, ctx.state.prefix, [amountToPay.toString()])
+      const rpcResponse = await ctx.rpc.call(GET_INVOICE_RPC_METHOD, ctx.state.prefix, [amountToPay.toString()])
+      paymentRequest = rpcResponse.paymentRequest
+      debug('got lightning payment request from peer:', paymentRequest)
     } catch (err) {
       debug('error getting lightning invoice from peer', err)
       throw err
@@ -161,18 +165,6 @@ module.exports = MakePaymentChannelPlugin({
     debug(`received lightning payment for ${amount}`)
   }
 })
-
-function hashToUuid (hash) {
-  const hex = Buffer.from(hash, 'hex').toString('hex')
-  let chars = hex.substring(0, 36).split('')
-  chars[8]  = '-'
-  chars[13] = '-'
-  chars[14] = '4'
-  chars[18] = '-'
-  chars[19] = '8'
-  chars[23] = '-'
-  return chars.join('')
-}
 
 async function payLightningInvoice (lightning, paymentRequest, amountToPay) {
   // TODO can we check how much it's going to cost before sending? what if the fees are really high?
@@ -221,7 +213,6 @@ async function createLightningInvoice (lightning, amount) {
       resolve(res)
     })
   })
-  debug('created lightning invoice:', invoice, 'for amount:', amount)
   return invoice
 }
 
@@ -230,3 +221,16 @@ function hash (preimage) {
   h.update(Buffer.from(preimage, 'hex'))
   return h.digest()
 }
+
+function hashToUuid (hash) {
+  const hex = Buffer.from(hash, 'hex').toString('hex')
+  let chars = hex.substring(0, 36).split('')
+  chars[8]  = '-'
+  chars[13] = '-'
+  chars[14] = '4'
+  chars[18] = '-'
+  chars[19] = '8'
+  chars[23] = '-'
+  return chars.join('')
+}
+
