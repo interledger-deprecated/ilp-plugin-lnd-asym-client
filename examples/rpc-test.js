@@ -13,15 +13,19 @@ const sender = new Plugin({
   peerPublicKey: '037c7d6b68302d53793d8aa8d5a83299239e3a148387bba64589873fe9a376c0ba',
   lndUri: 'localhost:11009',
   rpcUri: 'http://localhost:9002/rpc',
-  maxInFlight: 100000000,
-  _store: new shared.ObjStore()
+  maxUnsecured: '1000',
+  maxBalance: '10000000',
+  _store: new shared.ObjStore(),
+  authToken: 'token'
 })
 const receiver = new Plugin({
   peerPublicKey: '02770c79e7eef629aabd4c84396e5cf632893d44dea7248a894f4e80b6cf77060e',
   lndUri: 'localhost:12009',
   rpcUri: 'http://localhost:9001/rpc',
-  maxInFlight: 100000000,
-  _store: new shared.ObjStore()
+  maxUnsecured: '1000',
+  maxBalance: '10000000',
+  _store: new shared.ObjStore(),
+  authToken: 'token'
 })
 
 const rpc1 = Router()
@@ -75,7 +79,7 @@ async function runTest () {
     from: sender.getAccount(),
     to: receiver.getAccount(),
     ledger: sender.getInfo().prefix,
-    amount: 10,
+    amount: '10',
     ilp: 'blah',
     noteToSelf: {
       'just': 'some stuff'
