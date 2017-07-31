@@ -9,6 +9,8 @@ const uuid = require('uuid/v4')
 const moment = require('moment')
 const crypto = require('crypto')
 
+// NOTE: the configuration must be modified to point to your lnd nodes
+
 const sender = new Plugin({
   peerPublicKey: '037c7d6b68302d53793d8aa8d5a83299239e3a148387bba64589873fe9a376c0ba',
   lndUri: 'localhost:11009',
