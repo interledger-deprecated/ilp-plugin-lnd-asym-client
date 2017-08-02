@@ -1,6 +1,6 @@
 {
   "name": "ilp-plugin-lightning",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Interledger.js Ledger Plugin for the Lightning Network",
   "main": "src/plugin.js",
   "scripts": {
