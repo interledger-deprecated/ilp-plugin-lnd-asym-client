@@ -1,16 +1,7 @@
 // Library for decoding lnd payment requests
 'use strict'
 
-const zbase32 = require('./zbase32')
-const Uint64BE = require('int64-buffer').Uint64BE
-const crc32c = require('fast-crc32c')
-
-const destinationLen = 33 // Byte length of public key
-const paymentHashLen = 32 // Byte length of R-Hash
-const amountLen = 8 // Byte length of amount
-const crcLen = 4 // Byte length of CRC
-const invoiceLen = destinationLen + paymentHashLen + amountLen // Byte length og invoice part
-const totalExpectedLen = invoiceLen + crcLen
+const debug = require('debug')('ilp-plugin-lightning')
 
 function decodePaymentRequest (req) {
   if (!(typeof req === 'string' || req instanceof String)) {
@@ -19,30 +10,27 @@ function decodePaymentRequest (req) {
   if (!req) {
     throw new Error('payment request should not be empty')
   }
-  if (req.length < totalExpectedLen) {
-    throw new Error('payment request is too short, length=' + req.length + ', need at least ' + totalExpectedLen)
-  }
-  const decoded = zbase32.decodeString(req)
-  const invoice = decoded.slice(0, invoiceLen)
-  const crc = decoded.slice(invoiceLen, totalExpectedLen)
+  const match = req.match(/ln\w\w(\d+)([munp])(.*)/i)
+  debug('matched pay_req', match)
 
-  // Validate checksum
-  const expectedCRC32C = crc[0] * 256 * 256 * 256 + crc[1] * 256 * 256 + crc[2] * 256 + crc[3]
-  const actualCRC32C = crc32c.calculate(invoice)
-  if (expectedCRC32C !== actualCRC32C) {
-    throw new Error('Checksum mismatch')
+  if (!match) {
+    throw new Error('payment request does not look like BOLT-11 format')
   }
 
-  const destination = decoded.slice(0, destinationLen)
-  const paymentHash = decoded.slice(destinationLen, destinationLen + paymentHashLen)
-  // Big-indian uint64 amount in Satoshis
-  const amountByteArray = decoded.slice(destinationLen + paymentHashLen, destinationLen + paymentHashLen + amountLen)
-  const amount = (new Uint64BE(amountByteArray)).toNumber()
-  return {
-    destination: destination,
-    paymentHash: paymentHash,
-    amount: amount
+  if (match[2] === 'm') { // milli-Bitcoin to Satoshi
+    return { amount: parseInt(match[1]) * 100000 }
   }
+
+  if (match[2] === 'u') { // micro-Bitcoin to Satoshi
+    return { amount: parseInt(match[1]) * 100 }
+  }
+
+  if (match[2] ===  'n') { // nano-Bitcoin to Satoshi
+    return { amount: parseInt(match[1]) / 10 }
+  }
+
+  // 'p', pico-Bitcoin to Satoshi
+  return { amount: parseInt(match[1]) / 10000 }
 }
 
 exports.decodePaymentRequest = decodePaymentRequest

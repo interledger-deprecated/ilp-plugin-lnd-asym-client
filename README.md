@@ -14,19 +14,46 @@ npm install --save ilp-plugin-lightning
 ## Usage
 
 This plugin can be used with the [`ilp`](https://github.com/interledgerjs/ilp) client module or the [`ilp-connector`](https://github.com/interledgerjs/ilp-connector).
+See the [Ledger Plugin Interface](https://github.com/interledger/rfcs/blob/master/0004-ledger-plugin-interface/0004-ledger-plugin-interface.md) for documentation on available methods.
 
-```js
-const PluginLightning = require('ilp-plugin-lightning')
-const plugin = new PluginLightning({
-  lndUri: 'localhost:11009', // lnd rpc URI
-  // Peer Details
-  rpcUri: 'https://peer.example/rpc',
-  peerPublicKey: '03c6adfdb4d26a7587651e0b7e20a7c1bd4f6092ebd96a67d65cb5bef0eb4c33f4',
-  authToken: 'secret token decided with peer'
-  // Limits
-  maxBalance: '1000000' // max allowed balance in Satoshis
-  maxUnsecured: '1000' // max that can be sent over Interledger before settlement over Lightning is required
-})
+A minimal way to test your setup:
+* Set up a local Lightning cluster as explained in http://dev.lightning.community/tutorial/01-lncli/ - but run btcd with `--testnet` instead of `--simnet`
+* Then, using the `ALICE_PUBKEY` and `BOB_PUBKEY` from there, try running (for Mac):
+```sh
+DEBUG=* LND_TLS_CERT_PATH=~/Library/"Application Support"/Lnd/tls.cert ALICE_PUBKEY=036fb00... BOB_PUBKEY=45c2e46... node scripts/test.js
+```
+or for Linux:
+```sh
+DEBUG=* LND_TLS_CERT_PATH=~/.lnd/tls.cert ALICE_PUBKEY=036fb00... BOB_PUBKEY=45c2e46... node scripts/test.js
+```
+* It should output something like the following:
+```sh
+{ server: 'btp+ws://:pass@localhost:9000',
+  maxBalance: '1000000',
+  maxUnsecured: '1000',
+  lndTlsCertPath: '/Users/michiel/Library/Application Support/Lnd/tls.cert',
+  lndUri: 'localhost:10009',
+  peerPublicKey: '036fb0045c2e4651995b7e2fe6656fac729087857af56dc75ab48f9769e0a7001f',
+  _store: ObjStore { s: {} } }
+{ listener: { port: 9000 },
+  incomingSecret: 'pass',
+  prefix: 'test.crypto.lightning.btc.testnet3.',
+  info: {},
+  maxBalance: '1000000',
+  maxUnsecured: '1000',
+  lndTlsCertPath: '/Users/michiel/Library/Application Support/Lnd/tls.cert',
+  lndUri: 'localhost:10009',
+  peerPublicKey: '036fb0045c2e4651995b7e2fe6656fac729087857af56dc75ab48f9769e0a7001f',
+  _store: ObjStore { s: {} } }
+connnn... 1
+connnn... 2
+connnn... 3
+connnn... 1
+connnn... 2
+connnn... 3
+Transfer prepared server-side. Condition: L0PV5Khe_vkNV2NIH5Sts8muJYGLb1lDrUEXHsAfPJc
+Transfer prepared client-side, waiting for fulfillment...
+Transfer executed. Fulfillment: yUu7TlEGuz6es7_UBi7AQGFqP_GOBczSytECWAoc9CI
 ```
 
 See the [Ledger Plugin Interface](https://github.com/interledger/rfcs/blob/master/0004-ledger-plugin-interface/0004-ledger-plugin-interface.md) for documentation on available methods.
