@@ -3,6 +3,7 @@
 const grpc = require('grpc')
 const debug = require('debug')('ilp-plugin-lightning')
 const crypto = require('crypto')
+const fs = require('fs')
 const path = require('path')
 const BigNumber = require('bignumber.js')
 const decodePaymentRequest = require('./reqdecode').decodePaymentRequest
@@ -19,8 +20,10 @@ module.exports = makePaymentChannelPlugin({
   pluginName: 'lightning',
 
   constructor: function (ctx, opts) {
-    if (!opts.rpcUri) {
-      throw new InvalidFieldsError('missing opts.rpcUri')
+    if (!opts.lndTlsCertPath) {
+      throw new InvalidFieldsError('missing opts.lndTlsCertPath;' +
+          ' try /home/YOURNAME/.lnd/tls.cert (Linux) or' +
+          ' /Users/YOURNAME/Library/Application Support/Lnd/tls.cert (Mac)')
     } else if (!opts.peerPublicKey) {
       throw new InvalidFieldsError('missing opts.peerPublicKey')
     } else if (!opts.maxInFlight && !opts.maxUnsecured) {
@@ -28,7 +31,6 @@ module.exports = makePaymentChannelPlugin({
     } else if (!opts.lndUri) {
       throw new InvalidFieldsError('missing opts.lndUri')
     }
-
     ctx.state.incomingSettlements = ctx.backend.getTransferLog('incoming_settlements')
     ctx.state.amountSettled = ctx.backend.getMaxValueTracker('amount_settled')
     ctx.state.maxUnsecured = opts.maxUnsecured || opts.maxInFlight
@@ -36,9 +38,10 @@ module.exports = makePaymentChannelPlugin({
     ctx.state.peerPublicKey = opts.peerPublicKey
     ctx.state.lndUri = opts.lndUri
     ctx.state.network = opts.network
-    ctx.state.lightning = new lnrpc.Lightning(ctx.state.lndUri, grpc.credentials.createInsecure())
 
+    this.lndTlsCertPath = opts.lndTlsCertPath
     ctx.rpc.addMethod(GET_INVOICE_RPC_METHOD, async function (amount) {
+      debug('creating lightning invoice for amount', amount)
       const invoice = await createLightningInvoice(ctx.state.lightning, amount)
       await ctx.state.incomingSettlements.prepare({
         id: hashToUuid(invoice.r_hash),
@@ -55,7 +58,15 @@ module.exports = makePaymentChannelPlugin({
   getAuthToken: (ctx) => (ctx.state.authToken),
 
   connect: async function (ctx, opts) {
+    const lndTlsCertPath = this.lndTlsCertPath
     try {
+      const lndCert = await new Promise((resolve, reject) => {
+        fs.readFile(lndTlsCertPath, (err, cert) => {
+          if (err) throw err
+          resolve(cert)
+        })
+      })
+      ctx.state.lightning = new lnrpc.Lightning(ctx.state.lndUri, grpc.credentials.createSsl(lndCert))
       debug('connecting to lnd:', ctx.state.lndUri)
       const lightningInfo = await new Promise((resolve, reject) => {
         ctx.state.lightning.getInfo({}, (err, info) => {
@@ -109,7 +120,7 @@ module.exports = makePaymentChannelPlugin({
 
   getAccount: (ctx) => ctx.state.account,
   getPeerAccount: (ctx) => ctx.state.peerAccount,
-  getInfo: (ctx) => ctx.state.info, // TODO return cloned object
+  getInfo: (ctx) => Object.assign({}, ctx.state.info),
 
   handleIncomingPrepare: async function (ctx, transfer) {
     const incoming = await ctx.transferLog.getIncomingFulfilledAndPrepared()
@@ -139,7 +150,7 @@ module.exports = makePaymentChannelPlugin({
 
     let paymentRequest
     try {
-      const rpcResponse = await ctx.rpc.call(GET_INVOICE_RPC_METHOD, ctx.state.prefix, [amountToPay.toString()])
+      const rpcResponse = await ctx.rpc.call(GET_INVOICE_RPC_METHOD, ctx.state.prefix, amountToPay.toString())
       paymentRequest = rpcResponse.paymentRequest
       debug('got lightning payment request from peer:', paymentRequest)
     } catch (err) {
@@ -174,7 +185,7 @@ async function payLightningInvoice (lightning, paymentRequest, amountToPay) {
   const decodedReq = decodePaymentRequest(paymentRequest)
   const amountDiff = new BigNumber(decodedReq.amount).sub(amountToPay).absoluteValue()
   if (amountDiff.greaterThan(new BigNumber(amountToPay).times(0.05))) {
-    debug('amounts in payment request and in transfer are significantly different:', decodedReq, transfer)
+    debug('amounts in payment request and in transfer are significantly different:', decodedReq, amountToPay)
     throw new Error(`amounts in payment request and in transfer are significantly different. transfer amount: ${amountToPay}, payment request amount: ${decodedReq.amount}`)
   }
 
@@ -225,7 +236,7 @@ function hash (preimage) {
 function hashToUuid (hash) {
   const hex = Buffer.from(hash, 'hex').toString('hex')
   let chars = hex.substring(0, 36).split('')
-  chars[8]  = '-'
+  chars[8] = '-'
   chars[13] = '-'
   chars[14] = '4'
   chars[18] = '-'
@@ -233,4 +244,3 @@ function hashToUuid (hash) {
   chars[23] = '-'
   return chars.join('')
 }
-
