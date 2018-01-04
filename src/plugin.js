@@ -9,17 +9,15 @@ const BigNumber = require('bignumber.js')
 const decodePaymentRequest = require('./reqdecode').decodePaymentRequest
 const shared = require('ilp-plugin-shared')
 const { InvalidFieldsError, NotAcceptedError } = shared.Errors
-const { makePaymentChannelPlugin } = require('ilp-plugin-payment-channel-framework')
+const PluginBtp = require('ilp-plugin-btp')
 
 const lnrpcDescriptor = grpc.load(path.join(__dirname, 'rpc.proto'))
 const lnrpc = lnrpcDescriptor.lnrpc
 
 const GET_INVOICE_RPC_METHOD = '_get_lightning_invoice'
 
-module.exports = makePaymentChannelPlugin({
-  pluginName: 'lightning',
-
-  constructor: function (ctx, opts) {
+class PluginLightning extends PluginBtp {
+  constructor (opts) {
     if (!opts.lndTlsCertPath) {
       throw new InvalidFieldsError('missing opts.lndTlsCertPath;' +
           ' try /home/YOURNAME/.lnd/tls.cert (Linux) or' +
@@ -31,33 +29,21 @@ module.exports = makePaymentChannelPlugin({
     } else if (!opts.lndUri) {
       throw new InvalidFieldsError('missing opts.lndUri')
     }
-    ctx.state.incomingSettlements = ctx.backend.getTransferLog('incoming_settlements')
-    ctx.state.amountSettled = ctx.backend.getMaxValueTracker('amount_settled')
-    ctx.state.maxUnsecured = opts.maxUnsecured || opts.maxInFlight
-    ctx.state.authToken = opts.authToken
-    ctx.state.peerPublicKey = opts.peerPublicKey
-    ctx.state.lndUri = opts.lndUri
-    ctx.state.network = opts.network
+
+    super(opts)
+
+    this.incomingSettlements = ctx.backend.getTransferLog('incoming_settlements')
+    this.amountSettled = ctx.backend.getMaxValueTracker('amount_settled')
+    this.maxUnsecured = opts.maxUnsecured || opts.maxInFlight
+    this.authToken = opts.authToken
+    this.peerPublicKey = opts.peerPublicKey
+    this.lndUri = opts.lndUri
 
     this.lndTlsCertPath = opts.lndTlsCertPath
-    ctx.rpc.addMethod(GET_INVOICE_RPC_METHOD, async function (amount) {
-      debug('creating lightning invoice for amount', amount)
-      const invoice = await createLightningInvoice(ctx.state.lightning, amount)
-      await ctx.state.incomingSettlements.prepare({
-        id: hashToUuid(invoice.r_hash),
-        amount,
-        executionCondition: invoice.r_hash
-      })
-      debug('created lightning invoice:', invoice.payment_request, 'for amount:', amount)
-      return {
-        paymentRequest: invoice.payment_request
-      }
-    })
-  },
+    this.invoices = new Map()
+  }
 
-  getAuthToken: (ctx) => (ctx.state.authToken),
-
-  connect: async function (ctx, opts) {
+  async _connect () {
     const lndTlsCertPath = this.lndTlsCertPath
     try {
       const lndCert = await new Promise((resolve, reject) => {
@@ -66,116 +52,147 @@ module.exports = makePaymentChannelPlugin({
           resolve(cert)
         })
       })
-      ctx.state.lightning = new lnrpc.Lightning(ctx.state.lndUri, grpc.credentials.createSsl(lndCert))
-      debug('connecting to lnd:', ctx.state.lndUri)
+      this.lightning = new lnrpc.Lightning(this.lndUri, grpc.credentials.createSsl(lndCert))
+      debug('connecting to lnd:', this.lndUri)
       const lightningInfo = await new Promise((resolve, reject) => {
-        ctx.state.lightning.getInfo({}, (err, info) => {
+        this.lightning.getInfo({}, (err, info) => {
           if (err) return reject(err)
           resolve(info)
         })
       })
       debug('got lnd info:', lightningInfo)
-      ctx.state.publicKey = lightningInfo.identity_pubkey
-      ctx.state.network = ctx.state.network || lightningInfo.chains[0]
-      const scheme = lightningInfo.testnet
-        ? 'test.'
-        : 'g.'
-      const neighborhood = ctx.state.network + '.lightning.'
-      ctx.state.prefix = scheme + neighborhood
-      // TODO add public keys to prefix, because ctx.state is just a bilateral channel
-      // right now we can't send to anyone on lightning, because we need a way to message
-      // the other plugins aside from using HTTP RPC
-      ctx.state.account = ctx.state.prefix + ctx.state.publicKey
-      ctx.state.peerAccount = ctx.state.prefix + ctx.state.peerPublicKey
-      debug(`my account is: ${ctx.state.account}, peer account is: ${ctx.state.peerAccount}`)
     } catch (err) {
       debug('error connecting to lnd', err)
       throw err
     }
 
-    let currencyCode
-    if (ctx.state.network === 'bitcoin') {
-      currencyCode = 'BTC'
-    } else if (ctx.state.network === 'litecoin') {
-      currencyCode = 'LTC'
-    } else {
-      currencyCode = '???'
-    }
-    ctx.state.info = {
-      prefix: ctx.state.prefix,
-      // TODO set currency code based on network
-      currencyCode,
-      currencyScale: 8,
-      connectors: [ ctx.state.prefix + ctx.state.peerPublicKey ]
-    }
+    debug('connected to lnd:', this.lndUri)
+    this.connected = true
+  }
 
-    debug('connected to lnd:', ctx.state.lndUri)
-    ctx.state.connected = true
-  },
-
-  disconnect: async function (ctx) {
+  async _disconnect () {
     debug('disconnect')
-    // TODO do we need to disconnect ctx.state.lightning?
-  },
+    // TODO do we need to disconnect this.lightning?
+  }
 
-  getAccount: (ctx) => ctx.state.account,
-  getPeerAccount: (ctx) => ctx.state.peerAccount,
-  getInfo: (ctx) => Object.assign({}, ctx.state.info),
+  async sendMoney (amount) {
+    debug(`createOutgoingClaim: amountToPay: ${amount}`)
 
-  handleIncomingPrepare: async function (ctx, transfer) {
-    const incoming = await ctx.transferLog.getIncomingFulfilledAndPrepared()
-    const amountReceived = await ctx.state.incomingSettlements.getIncomingFulfilled()
-
-    debug(`handleIncomingPrepare: total incoming so far: ${incoming}, amount received: ${amountReceived}, transfer amount: ${transfer.amount}`)
-
-    const exceeds = new BigNumber(incoming)
-      .minus(amountReceived)
-      .greaterThan(ctx.state.maxUnsecured)
-
-    if (exceeds) {
-      throw new NotAcceptedError(transfer.id + ' exceeds max unsecured balance')
-    }
-  },
-
-  createOutgoingClaim: async function (ctx, outgoingBalance) {
-    const lastPaid = (await ctx.state.amountSettled.setIfMax({ value: outgoingBalance, data: null })).value
-    const amountToPay = new BigNumber(outgoingBalance)
-      .minus(lastPaid)
-
-    debug(`createOutgoingClaim: last paid: ${lastPaid} amountToPay: ${amountToPay}`)
-
-    if (amountToPay.lessThanOrEqualTo('0')) {
+    if (new BigNumber(amount).lessThanOrEqualTo('0')) {
       return
     }
 
     let paymentRequest
     try {
-      const rpcResponse = await ctx.rpc.call(GET_INVOICE_RPC_METHOD, ctx.state.prefix, amountToPay.toString())
-      paymentRequest = rpcResponse.paymentRequest
+      const response = await this._call(null, {
+        type: BtpPacket.TYPE_MESSAGE,
+        requestId: await _requestId(),
+        data: { protocolData: [{
+          protocolName: GET_INVOICE_RPC_METHOD,
+          contentType: BtpPacket.MIME_APPLICATION_JSON,
+          data: Buffer.from(JSON.stringify(amount))
+        }] }
+      })
+
+      paymentRequest = JSON.parse(response
+        .protocolData
+        .filter(p => p.protocolName === GET_INVOICE_RPC_METHOD)[0]
+        .data
+        .toString())
+        .paymentRequest
+
       debug('got lightning payment request from peer:', paymentRequest)
     } catch (err) {
       debug('error getting lightning invoice from peer', err)
       throw err
     }
 
-    const paymentPreimage = await payLightningInvoice(ctx.state.lightning, paymentRequest, amountToPay)
+    const paymentPreimage = await payLightningInvoice(this.lightning, paymentRequest, amountToPay)
 
-    return {
-      amount: amountToPay,
-      paymentPreimage
-    }
-  },
-
-  handleIncomingClaim: async function (ctx, { amount, paymentPreimage }) {
-    debug(`handleIncomingClaim for amount: ${amount}, paymentPreimage: ${paymentPreimage}`)
-    // If the payment preimage doesn't match a settlement
-    // we were waiting for we'll get a transfer not found error
-    await ctx.state.incomingSettlements.fulfill(
-      hashToUuid(hash(paymentPreimage)),
-      paymentPreimage)
-    debug(`received lightning payment for ${amount}`)
+    await this._call(null, {
+      type: BtpPacket.TYPE_TRANSFER,
+      requestId: await _requestId(),
+      data: {
+        amount,
+        protocolData: [{
+          protocolName: 'payment_preimage',
+          contentType: BtpPacket.MIME_APPLICATION_JSON,
+          data: Buffer.from(JSON.stringify({ paymentPreimage }))
+        }]
+      }
+    })
   }
-})
+
+  async _handleMoney (from, { requestId, data }) {
+    const amount = data.amount
+    const paymentPreimage = JSON.parse(data
+      .protocolData
+      .filter(p => p.protocolName === 'payment_preimage')[0]
+      .data
+      .toString())
+      .paymentPreimage
+
+    debug(`handleIncomingClaim for amount: ${amount}, paymentPreimage: ${paymentPreimage}`)
+
+    // If the payment preimage doesn't match an invoice
+    // we were waiting for we'll get an error
+
+    const condition = crypto
+      .createHash('sha256')
+      .update(paymentPreimage)
+      .digest()
+      .toString('hex')
+
+    const invoiceAmount = this.invoices.get(condition)
+    if (!invoiceAmount) {
+      throw new Error('no invoice found. condition=' + condition)
+    }
+
+    if (invoiceAmount !== amount) {
+      throw new Error(`settlement amount does not match invoice amount.
+        invoice=${invoiceAmount} amount=${amount}`)
+    }
+
+    debug(`received lightning payment for ${amount}`)
+    this.invoices.delete(condition)
+
+    if (this._moneyHandler) {
+      await this._moneyHandler(amount)
+    }
+
+    return []
+  }
+
+  async _handleData (from, { requestId, data }) {
+    const { ilp, protocolMap } = this.protocolDataToIlpAndCustom(data)
+
+    if (protocolMap[GET_INVOICE_RPC_METHOD]) {
+      const amount = JSON.parse(protocolMap[GET_INVOICE_RPC_METHOD]
+        .data
+        .toString())
+
+      debug('creating lightning invoice for amount', amount)
+      const invoice = await createLightningInvoice(this.lightning, amount)
+      this.invoices.set(invoice.r_hash, amount)
+
+      debug('created lightning invoice:', invoice.payment_request, 'for amount:', amount)
+      return [{
+        protocolName: GET_INVOICE_RPC_METHOD,
+        contentType: BtpPacket.MIME_APPLICATION_JSON,
+        data: Buffer.from(JSON.stringify({
+          paymentRequest: invoice.payment_request
+        }))
+      }]
+    }
+
+    if (!this._dataHandler) {
+      throw new Error('no request handler registered')
+    }
+
+    const response = await this._dataHandler(ilp)
+    return this.ilpAndCustomToProtocolData({ ilp: response })
+  }
+}
 
 async function payLightningInvoice (lightning, paymentRequest, amountToPay) {
   // TODO can we check how much it's going to cost before sending? what if the fees are really high?
@@ -244,3 +261,6 @@ function hashToUuid (hash) {
   chars[23] = '-'
   return chars.join('')
 }
+
+PluginLightning.version = 2
+module.exports = PluginLightning
