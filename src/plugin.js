@@ -30,8 +30,6 @@ class PluginLightning extends PluginBtp {
 
     super(opts)
 
-    this.incomingSettlements = ctx.backend.getTransferLog('incoming_settlements')
-    this.amountSettled = ctx.backend.getMaxValueTracker('amount_settled')
     this.maxUnsecured = opts.maxUnsecured || opts.maxInFlight
     this.authToken = opts.authToken
     this.lndUri = opts.lndUri
