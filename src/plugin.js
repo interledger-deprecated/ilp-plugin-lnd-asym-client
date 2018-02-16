@@ -22,8 +22,6 @@ class PluginLightning extends PluginBtp {
       throw new InvalidFieldsError('missing opts.lndTlsCertPath;' +
           ' try /home/YOURNAME/.lnd/tls.cert (Linux) or' +
           ' /Users/YOURNAME/Library/Application Support/Lnd/tls.cert (Mac)')
-    } else if (!opts.peerPublicKey) {
-      throw new InvalidFieldsError('missing opts.peerPublicKey')
     } else if (!opts.maxInFlight && !opts.maxUnsecured) {
       throw new InvalidFieldsError('missing opts.maxInFlight')
     } else if (!opts.lndUri) {
@@ -32,11 +30,8 @@ class PluginLightning extends PluginBtp {
 
     super(opts)
 
-    this.incomingSettlements = ctx.backend.getTransferLog('incoming_settlements')
-    this.amountSettled = ctx.backend.getMaxValueTracker('amount_settled')
     this.maxUnsecured = opts.maxUnsecured || opts.maxInFlight
     this.authToken = opts.authToken
-    this.peerPublicKey = opts.peerPublicKey
     this.lndUri = opts.lndUri
 
     this.lndTlsCertPath = opts.lndTlsCertPath
