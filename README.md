@@ -34,7 +34,8 @@ lncli --no-macaroons walletbalance witness-only=true
 
 * Run `DEBUG=* node test.js`
 
-... you will run into https://github.com/interledgerjs/ilp-plugin-lnd-asym-server/issues/2  (will fix asap)
+* You will see a line saying `Now go to https://interfaucet.ilpdemo.org/?...` - open that URL in your browser. You should see a picture of gummy bears coming out of a faucet
+(not a picture of a sad faucet).
 
 ## How It Works
 

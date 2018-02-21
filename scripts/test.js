@@ -21,7 +21,7 @@ plugin.connect().then(async () => {
   const info = IlDcp.deserializeIldcpResponse(response)
   const fulfillment = crypto.randomBytes(32)
   const condition = sha256(fulfillment)
-  console.log(`Now go to https://interfaucet.ilpdemo.org/?address=${info.clientAddress}&condition=${condition.toString('hex')}`)
+  console.log(`\n\nNow go to https://interfaucet.ilpdemo.org/?address=${info.clientAddress}&condition=${condition.toString('hex')}\n\n`)
   plugin.registerDataHandler(packet => {
     const prepare = IlpPacket.deserializeIlpPrepare(packet)
     console.log(prepare)
