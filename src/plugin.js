@@ -12,6 +12,7 @@ const decodePaymentRequest = require('./reqdecode').decodePaymentRequest
 const shared = require('ilp-plugin-shared')
 const { InvalidFieldsError, NotAcceptedError } = shared.Errors
 const PluginBtp = require('ilp-plugin-btp')
+const BtpPacket = require('btp-packet')
 
 // Due to updated ECDSA generated tls.cert we need to let gprc know that
 // we need to use that cipher suite otherwise there will be a handhsake
@@ -42,6 +43,7 @@ class PluginLightning extends PluginBtp {
     this.lndUri = opts.lndUri
 
     this.lndTlsCertPath = opts.lndTlsCertPath || (process.platform === 'darwin' ? MAC_TLS_CERT_PATH : LINUX_TLS_CERT_PATH)
+    this.macaroonPath = opts.macaroonPath || (process.platform === 'darwin' ? MAC_MACAROON_PATH : LINUX_MACAROON_PATH)
     this.invoices = new Map()
   }
 
@@ -52,11 +54,11 @@ class PluginLightning extends PluginBtp {
 
       // Use macaroons also, if there is one in the lnd directory
       // See https://github.com/lightningnetwork/lnd/blob/master/docs/grpc/javascript.md#using-macaroons
-      const macaroonExists = await util.promisify(fs.exists)(this.macaroonPath)
+      const macaroonExists = this.macaroonPath && await util.promisify(fs.exists)(this.macaroonPath)
       if (macaroonExists) {
         const macaroon = await util.promisify(fs.readFile)(this.macaroonPath)
         const metadata = new grpc.Metadata()
-        metadata.add('macaroon', macaroon)
+        metadata.add('macaroon', macaroon.toString('hex'))
         const macaroonCreds = grpc.credentials.createFromMetadataGenerator((_args, callback) => {
           callback(null, metadata);
         })
