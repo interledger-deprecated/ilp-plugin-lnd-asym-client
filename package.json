@@ -1,7 +1,7 @@
 {
-  "name": "ilp-plugin-lightning",
+  "name": "ilp-plugin-lnd-asym-client",
   "version": "0.3.1",
-  "description": "Interledger.js Ledger Plugin for the Lightning Network",
+  "description": "Interledger.js Client Ledger Plugin for the Lightning Network",
   "main": "src/plugin.js",
   "scripts": {
     "test": "mocha test/*",
