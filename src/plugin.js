@@ -18,6 +18,7 @@ const BtpPacket = require('btp-packet')
 // we need to use that cipher suite otherwise there will be a handhsake
 // error when we communicate with the lnd rpc server.
 process.env.GRPC_SSL_CIPHER_SUITES = 'HIGH+ECDSA'
+
 const MAC_TLS_CERT_PATH = path.join(os.homedir(), 'Library/Application Support/Lnd/tls.cert')
 const LINUX_TLS_CERT_PATH = path.join(os.homedir(), '.lnd/tls.cert')
 const MAC_MACAROON_PATH = path.join(os.homedir(), 'Library/Application Support/Lnd/admin.macaroon')
@@ -115,7 +116,7 @@ class PluginLightning extends PluginBtp {
       throw err
     }
 
-    const paymentPreimage = await payLightningInvoice(this.lightning, paymentRequest, amountToPay)
+    const paymentPreimage = await payLightningInvoice(this.lightning, paymentRequest, amount)
 
     await this._call(null, {
       type: BtpPacket.TYPE_TRANSFER,
