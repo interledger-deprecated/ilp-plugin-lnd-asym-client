@@ -94,7 +94,7 @@ class PluginLightning extends PluginBtp {
     try {
       const response = await this._call(null, {
         type: BtpPacket.TYPE_MESSAGE,
-        requestId: await _requestId(),
+        requestId: crypto.randomBytes(4).readUInt32BE(0),
         data: { protocolData: [{
           protocolName: GET_INVOICE_RPC_METHOD,
           contentType: BtpPacket.MIME_APPLICATION_JSON,
@@ -119,7 +119,7 @@ class PluginLightning extends PluginBtp {
 
     await this._call(null, {
       type: BtpPacket.TYPE_TRANSFER,
-      requestId: await _requestId(),
+      requestId: crypto.randomBytes(4).readUInt32BE(0),
       data: {
         amount,
         protocolData: [{
