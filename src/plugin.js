@@ -26,11 +26,7 @@ const GET_INVOICE_RPC_METHOD = '_get_lightning_invoice'
 
 class PluginLightning extends PluginBtp {
   constructor (opts) {
-    if (!opts.lndTlsCertPath) {
-      throw new InvalidFieldsError('missing opts.lndTlsCertPath;' +
-          ' try /home/YOURNAME/.lnd/tls.cert (Linux) or' +
-          ' /Users/YOURNAME/Library/Application Support/Lnd/tls.cert (Mac)')
-    } else if (!opts.maxInFlight && !opts.maxUnsecured) {
+    if (!opts.maxInFlight && !opts.maxUnsecured) {
       throw new InvalidFieldsError('missing opts.maxInFlight')
     } else if (!opts.lndUri) {
       throw new InvalidFieldsError('missing opts.lndUri')
